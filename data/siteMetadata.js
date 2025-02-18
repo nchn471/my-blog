@@ -3,7 +3,7 @@ const siteMetadata = {
   title: 'Portfolio',
   author: 'Nguyen Cong Hoai Nam',
   headerTitle: 'Nam Nguyen',
-  description: "Sharing my journey through words. (nothing here yet 🫣)",
+  description: 'Sharing my journey through words. (nothing here yet 🫣)',
   language: 'en-us',
   theme: 'system', // system, dark or light
   siteUrl: 'https://tailwind-nextjs-starter-blog.vercel.app',
