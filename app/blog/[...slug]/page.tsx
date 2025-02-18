@@ -86,7 +86,7 @@ export default async function Page(props: { params: Promise<{ slug: string[] }> 
   if (postIndex === -1) {
     return notFound()
   }
-
+  
   const prev = sortedCoreContents[postIndex + 1]
   const next = sortedCoreContents[postIndex - 1]
   const post = allBlogs.find((p) => p.slug === slug) as Blog
