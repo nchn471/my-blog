@@ -12,7 +12,7 @@ const projectsData: Project[] = [
     lake), transforms data and trains the model using Apache Spark, and loads the processed data into PostgreSQL
     (data warehouse), orchestrated by Dagster and containerized with Docker.`,
     imgSrc: '/static/images/tiki-etl/tiki.png',
-    href: 'https://github.com/nchn471/tiki-recommender-etl-pipeline',
+    href: '/blog/tiki-recommender-etl-pipeline',
   },
   {
     title: 'Comprehensive Performance Analysis between Hadoop and Spark',
