@@ -7,20 +7,28 @@ interface Project {
 
 const projectsData: Project[] = [
   {
-    title: 'A Search Engine',
-    description: `What if you could look up any information in the world? Webpages, images, videos
-    and more. Google has many features to help you find exactly what you're looking
-    for.`,
-    imgSrc: '/static/images/google.png',
-    href: 'https://www.google.com',
+    title: 'Tiki Recommender ETL Pipeline',
+    description: `End-to-end ETL data pipeline that automatically scrapes data from Tiki.vn, stores it in MinIO (data
+    lake), transforms data and trains the model using Apache Spark, and loads the processed data into PostgreSQL
+    (data warehouse), orchestrated by Dagster and containerized with Docker.`,
+    imgSrc: '/static/images/tiki-etl/tiki.png',
+    href: 'https://github.com/nchn471/tiki-recommender-etl-pipeline',
   },
   {
-    title: 'The Time Machine',
-    description: `Imagine being able to travel back in time or to the future. Simple turn the knob
-    to the desired date and press "Go". No more worrying about lost keys or
-    forgotten headphones with this simple yet affordable solution.`,
-    imgSrc: '/static/images/time-machine.jpg',
-    href: '/blog/the-time-machine',
+    title: 'Comprehensive Performance Analysis between Hadoop and Spark',
+    description: `This study developed a fully distributed system on Linux virtual machines using Hadoop and Spark,
+    benchmarking various parameters to optimize performance and evaluate the efficiency of Apache Hadoop and
+    Apache Spark in large-scale data processing.`,
+    imgSrc: '/static/images/tiki-etl/cover.png',
+    href: 'https://github.com/nchn471/performance-analysis-hadoop-spark',
+  },
+  {
+    title: 'Developer Salary Prediction Website',
+    description: `A machine learning project that predicts developer salaries based on experience, country, education,
+    and technology stack. The project also includes visualizations to analyze developer’s market trends using the
+    Stack Overflow 2023 Survey Dataset.`,
+    imgSrc: '/static/images/cover3.jpg',
+    href: 'https://github.com/nchn471/Developer-Salary-Prediction',
   },
 ]
 
