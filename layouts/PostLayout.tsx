@@ -58,6 +58,7 @@ export default function PostLayout({ content, authorDetails, next, prev, childre
           <div className="grid-rows-[auto_1fr] divide-y divide-gray-200 pb-8 xl:grid xl:grid-cols-4 xl:gap-x-6 xl:divide-y-0 dark:divide-gray-700">
             <dl className="pt-6 pb-10 xl:border-b xl:border-gray-200 xl:pt-11 xl:dark:border-gray-700">
               <dt className="sr-only">Authors</dt>
+              {/* == Authors == */}
               <dd>
                 <ul className="flex flex-wrap justify-center gap-4 sm:space-x-12 xl:block xl:space-y-8 xl:space-x-0">
                   {authorDetails.map((author) => (
@@ -75,7 +76,8 @@ export default function PostLayout({ content, authorDetails, next, prev, childre
                         <dt className="sr-only">Name</dt>
                         <dd className="text-gray-900 dark:text-gray-100">{author.name}</dd>
                         <dt className="sr-only">Twitter</dt>
-                        <dd>
+                      {/* Twitter */}
+                        {/* <dd>
                           {author.twitter && (
                             <Link
                               href={author.twitter}
@@ -86,12 +88,24 @@ export default function PostLayout({ content, authorDetails, next, prev, childre
                                 .replace('https://x.com/', '@')}
                             </Link>
                           )}
-                        </dd>
+                        </dd> */}
+                      {/*Twitter */}
+                      <dd>
+                        {author.email && (
+                          <Link
+                          href={`mailto:${author.email}`}
+                          className="text-primary-500 hover:text-primary-600 dark:hover:text-primary-400"
+                          >
+                            {author.email}
+                          </Link>
+                        )}
+                      </dd>
                       </dl>
                     </li>
                   ))}
                 </ul>
               </dd>
+            {/* == Authors == */}
             </dl>
             <div className="divide-y divide-gray-200 xl:col-span-3 xl:row-span-2 xl:pb-0 dark:divide-gray-700">
               <div className="prose dark:prose-invert max-w-none pt-10 pb-8">{children}</div>
@@ -102,14 +116,15 @@ export default function PostLayout({ content, authorDetails, next, prev, childre
                 {` • `}
                 <Link href={editUrl(filePath)}>View on GitHub</Link>
               </div>
-              {siteMetadata.comments && (
+              {/* Hidden comments */}
+              {/* {siteMetadata.comments && (
                 <div
                   className="pt-6 pb-6 text-center text-gray-700 dark:text-gray-300"
                   id="comment"
                 >
                   <Comments slug={slug} />
                 </div>
-              )}
+              )} */}
             </div>
             <footer>
               <div className="divide-gray-200 text-sm leading-5 font-medium xl:col-start-1 xl:row-start-2 xl:divide-y dark:divide-gray-700">
