@@ -1,6 +1,10 @@
 {
-  "next-js": 2,
+  "github": 1,
   "guide": 3,
+  "next-js": 2,
+  "holiday": 1,
+  "canada": 1,
+  "images": 1,
   "dagster": 1,
   "docker": 1,
   "etl": 1,
@@ -9,9 +13,5 @@
   "streamlit": 1,
   "metabase": 1,
   "recommendation": 1,
-  "minio": 1,
-  "github": 1,
-  "holiday": 1,
-  "canada": 1,
-  "images": 1
+  "minio": 1
 }
