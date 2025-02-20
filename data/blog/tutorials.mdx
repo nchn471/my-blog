@@ -1,0 +1,52 @@
+---
+title: 'Note MDX Syntax'
+date: '2025-08-05'
+lastmod: '2025-08-05'
+tags: ['next js', 'guide']
+draft: true
+images: ['/static/images/twitter-card.png']
+layout: PostBanner
+---
+
+## Mục lục 
+```
+<TOCInline toc={props.toc} exclude="Introduction" />
+```
+<TOCInline toc={props.toc} exclude="Introduction" />
+
+## Video
+```
+<video controls>
+  <source
+    src="https://github-production-user-asset-6210df.s3.amazonaws.com/28362229/258559849-2124c81f-b99d-4431-839c-347e01a2616c.webm"
+    type="video/webm"
+  />
+</video>
+```
+<video controls>
+  <source
+    src="https://github-production-user-asset-6210df.s3.amazonaws.com/28362229/258559849-2124c81f-b99d-4431-839c-347e01a2616c.webm"
+    type="video/webm"
+  />
+</video>
+
+Parsing and display of math equations is included in this blog template. Parsing of math is enabled by `remark-math` and `rehype-katex`.
+KaTeX and its associated font is included in `_document.js` so feel free to use it on any page.
+[^1]
+
+[^1]: For the full list of supported TeX functions, check out the [KaTeX documentation](https://katex.org/docs/supported.html)
+
+The matrix of regressors $\mathbf{X}$ is a $n \times k$ matrix (or each row is a $k \times 1$ vector),
+
+
+
+```latex
+\mathbf{Y} = \left[\begin{array}
+  {c}
+  y_1 \\
+  . \\
+  . \\
+  . \\
+  y_n
+\end{array}\right]
+```

@@ -1,9 +1,835 @@
 ---
 title: Tiki Recommender ETL Pipeline
-date: '2012-12-09'
+date: '2024-12-09'
 tags: ['dagster', 'docker', 'etl','spark','postgresql','streamlit','metabase','recommendation','minio']
 draft: false
 layout: PostSimple
 ---
 
-# Comming Soon
+This project is an **ETL pipeline** designed to extract raw data from [Tiki](https://tiki.vn/) (a Vietnamese e-commerce platform), transform and clean it, and store it in a **data warehouse** for analytics and recommendation system development.
+
+This project applies knowledge from the **"Fundamental Data Engineering"** course by [AIDE](https://aisia.vn/courses). Special thanks to **Mr. Nguyen Thanh Binh** and **Mr. Hung Le** for their guidance.
+
+> [!NOTE]
+> **My Demo Website**: [Here](https://tiki-recommender-etl-pipeline.streamlit.app/) 
+>
+> **My Source Code**
+> <a href="https://github.com/nchn471/tiki-recommender-etl-pipeline" target="_blank">
+>  <img src="https://opengraph.githubassets.com/1/nchn471/tiki-recommender-etl-pipeline" 
+>       alt="GitHub Repository Thumbnail" width="500"/>
+> </a>
+
+# Contents
+
+<TOCInline toc={props.toc} exclude="Contents" />
+
+# Data Pipeline Diagram
+![Data Pipeline](/static/images/tiki-etl/dataflow.png)
+## Description
+End-to-end ETL data pipeline that automatically scrapes data from Tiki.vn, stores it in MinIO (data lake), transforms data and trains the model using Apache Spark, and loads the processed data into PostgreSQL (data warehouse), orchestrated by Dagster and containerized with Docker
+
+## List of Technologies Used
+- **[Dagster](https://dagster.io/)** - Data orchestration & monitoring.
+- **[Docker](https://www.docker.com/)** - Containerization platform.
+- **[MinIO](https://min.io/)** - Object storage for data lake.
+- **[Apache Spark](https://spark.apache.org/)** - Distributed data processing.
+- **[PostgreSQL](https://www.postgresql.org/)** - Data warehouse storage.
+- **[Metabase](https://www.metabase.com/)** - Business Intelligence (BI) dashboard.
+- **[Streamlit](https://streamlit.io/)** - Interactive web application for recommendations.
+
+# Setup
+## Enviroment File
+```env:env
+# PostgreSQL
+POSTGRES_HOST=de_psql
+POSTGRES_PORT=5432
+POSTGRES_DB=postgres
+POSTGRES_USER=admin
+POSTGRES_PASSWORD=admin123
+POSTGRES_HOST_AUTH_METHOD=trust
+
+# Dagster
+DAGSTER_PG_HOSTNAME=de_psql
+DAGSTER_PG_USERNAME=admin
+DAGSTER_PG_PASSWORD=admin123
+DAGSTER_PG_DB=postgres
+
+# MinIO
+MINIO_ENDPOINT=minio:9000
+MINIO_ROOT_USER=minio
+MINIO_ROOT_PASSWORD=minio123
+DATALAKE_BUCKET=warehouse
+AWS_ACCESS_KEY_ID=minio
+AWS_SECRET_ACCESS_KEY=minio123
+AWS_REGION=us-east-1
+
+# Metabase
+MB_DB_TYPE=postgres
+MB_DB_DBNAME=postgres
+MB_DB_PORT=5432
+MB_DB_USER=admin
+MB_DB_PASS=admin123
+MB_DB_HOST=de_psql
+# MB_DB_FILE=/metabase_data/metabase.db
+```
+Since all processes are containerized using Docker, we use an `env` file to store environment variables for each Docker image. 
+
+After setting up the environment, we proceed to build the Docker images used in this project with the `docker-compose.yml` file.  
+
+## PostgreSQL  
+PostgreSQL is an open-source object-relational database management system. In this project, it is used as a data warehouse.  
+
+```yaml
+  de_psql:
+    image: postgres:15
+    container_name: de_psql
+    volumes:
+      - ./mnt/postgresql:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    env_file:
+      - env
+    networks:
+      - de_network
+```
+
+## MinIO  
+MinIO is an S3-compatible object storage system, allowing it to be managed similarly to Amazon S3. It is used as a data lake in this project.  
+
+```yaml
+  minio:
+    hostname: minio
+    image: "minio/minio"
+    container_name: minio
+    ports:
+      - "9001:9001"
+      - "9000:9000"
+    command:
+      - server
+      - /data
+      - --console-address
+      - ":9001"
+    volumes:
+      - ./mnt/minio:/data
+    env_file:
+      - env
+    networks:
+      - de_network
+
+  mc:
+    image: minio/mc
+    container_name: mc
+    hostname: mc
+    env_file:
+      - env
+    entrypoint: >
+      /bin/sh -c "
+      until (/usr/bin/mc config host add minio http://minio:9000 minio minio123)
+      do
+        echo '...waiting...' && sleep 1;
+      done;
+      /usr/bin/mc mb minio/warehouse;
+      /usr/bin/mc policy set public minio/warehouse;
+      exit 0;
+      "
+    depends_on:
+      - minio
+    networks:
+      - de_network
+```
+
+## Apache Spark  
+Apache Spark is a distributed data processing framework. In this project, four Spark-related images are built:  
+
+1. **Spark Master** - Master node  
+2. **Spark Worker (2 instances)** - Two worker nodes  
+3. **Spark Notebook** - Jupyter Notebook for Spark, used for testing before integrating into the data pipeline  
+
+Spark is used for data transformation and model building in the data pipeline.
+
+> [!Warning] 
+> Spark requires matching versions to function correctly. Ensure that Python and PySpark versions are aligned.  
+
+```yaml
+spark_master:
+  build:
+    context: ./docker_images/spark
+    dockerfile: ./Dockerfile
+  container_name: spark_master
+  hostname: spark-master
+  environment:
+    - SPARK_MODE=master
+    - SPARK_LOCAL_IP=spark-master
+    - SPARK_RPC_AUTHENTICATION_ENABLED=no
+    - SPARK_RPC_ENCRYPTION_ENABLED=no
+    - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
+    - SPARK_SSL_ENABLED=no
+  ports:
+    - '7077:7077'
+    - '8080:8080'
+  volumes:
+    - ./docker_images/spark/spark-defaults.conf:/opt/bitnami/spark/conf/spark-defaults.conf
+  networks:
+    - de_network
+
+spark_worker:
+  build:
+    context: ./docker_images/spark
+    dockerfile: ./Dockerfile
+  environment:
+    - SPARK_MODE=worker
+    - SPARK_MASTER_URL=spark://spark-master:7077
+    - SPARK_WORKER_MEMORY=1G
+    - SPARK_WORKER_CORES=1
+    - SPARK_RPC_AUTHENTICATION_ENABLED=no
+    - SPARK_RPC_ENCRYPTION_ENABLED=no
+    - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
+    - SPARK_SSL_ENABLED=no
+  deploy:
+    replicas: 2
+  networks:
+    - de_network
+
+spark_notebook:
+  build:
+    context: ./docker_images/spark_notebook
+    dockerfile: ./Dockerfile
+  container_name: spark_notebook
+  user: root
+  environment:
+    - JUPYTER_ENABLE_LAB="yes"
+    - GRANT_SUDO="yes"
+  volumes:
+    - ./docker_images/spark_notebook:/home/jovyan/work
+    - ./docker_images/spark_notebook/spark-defaults.conf:/usr/local/spark/conf/spark-defaults.conf
+  ports:
+    - "8888:8888"
+    - "4040:4040"
+  networks:
+    - de_network
+```
+
+## Dagster  
+Dagster is an orchestration tool for managing tasks, jobs, and scheduling in ETL pipelines. It is simpler than Apache Airflow and easier to deploy.  
+
+With Dagster, we build containers for the web UI, daemon, and ETL processes.
+
+```yaml
+  de_dagster:
+    build:
+      context: docker_images/dagster/
+    container_name: de_dagster
+    image: de_dagster
+
+  de_dagster_dagit:
+    image: de_dagster:latest
+    entrypoint:
+      - dagit
+      - -h
+      - "0.0.0.0"
+      - -p
+      - "3001"
+      - -w
+      - workspace.yaml
+    container_name: de_dagster_dagit
+    expose:
+      - "3001"
+    ports:
+      - "3001:3001"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./dagster_home:/opt/dagster/dagster_home
+    env_file:
+      - env
+    networks:
+      - de_network
+
+  de_dagster_daemon:
+    image: de_dagster:latest
+    entrypoint:
+      - dagster-daemon
+      - run
+    container_name: de_dagster_daemon
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./dagster_home:/opt/dagster/dagster_home
+    env_file:
+      - env
+    networks:
+      - de_network
+
+  etl_pipeline:
+    build:
+      context: ./etl_pipeline
+      dockerfile: ./Dockerfile
+    container_name: etl_pipeline
+    image: etl_pipeline:latest
+    volumes:
+      - ./etl_pipeline:/opt/dagster/app
+    env_file:
+      - env
+    networks:
+      - de_network
+```
+
+## Metabase  
+Metabase is a business intelligence (BI) tool used for data analytics and visualization.  
+
+```yaml
+  de_metabase:
+    image: metabase/metabase:v0.52.4.4
+    container_name: de_metabase
+    volumes:
+      - ./mnt/metabase:/metabase_data
+    ports:
+      - "3000:3000"
+    env_file: env
+    networks:
+      - de_network
+```
+
+## Streamlit  
+Streamlit is used for serving the product recommendation web application.  
+
+```yaml
+  de_streamlit:
+    build:
+      context: ./docker_images/streamlit
+      dockerfile: ./Dockerfile
+    image: de_streamlit:latest
+    container_name: de_streamlit
+    volumes:
+      - ./docker_images/streamlit/app:/app
+    ports:
+      - "8501:8501"
+    networks:
+      - de_network
+```
+
+> [!NOTE]
+If you only follow the instructions above, you may encounter many bugs. Please visit my [GitHub Repo](https://github.com/nchn471/tiki-recommender-etl-pipeline), where I provide the full necessary configuration in detail.
+
+# ETL Process  
+
+Before we start, let’s review the ETL definitions:  
+
+![ETL Process](/static/images/tiki-etl/etl_process.png)  
+
+- **Bronze Layer**: Stores raw data.  
+- **Silver Layer**: Transformed data, including cleaning, filtering, etc.  
+- **Gold Layer**: Business-level data that is structured for insightful queries and loaded into the data warehouse.  
+
+> [!NOTE]  
+> In my project, I add an additional **Recommendation Layer**, where I train recommendation models using data from the Gold Layer.  
+
+## Extract (Bronze Layer)  
+First, we need data. Let's walk through the process of crawling data from [Tiki.vn](https://tiki.vn).  
+Since Tiki provides a public API, we can directly fetch the data, store it as raw data, and save it into MinIO for later processing.
+
+We build a Python class [TikiCrawler](https://github.com/nchn471/tiki-recommender-etl-pipeline/blob/main/etl_pipeline/etl_pipeline/resources/tiki_crawler.py) to perform this task.
+
+```python
+import requests
+import time
+import os
+import random
+import pandas as pd
+import urllib.request
+import pandas as pd
+import threading
+import queue
+
+from tqdm import tqdm
+from bs4 import BeautifulSoup
+from collections import deque
+from etl_pipeline.resources.minio_io_manager import MinIOHandler, connect_minio
+from minio.error import S3Error
+
+
+# Headers để fake User-Agent
+headers = {
+    'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+    'Accept': 'application/json, text/plain, */*',
+    'Accept-Language': 'vi-VN,vi;q=0.8,en-US;q=0.5,en;q=0.3',
+    'x-guest-token': 'yj5i8HfLhplN6ckw471WVBG2QAzbTr3a',
+    'Connection': 'keep-alive',
+    'TE': 'Trailers',
+}
+
+params_page = {
+    'limit': '40',
+    'aggregations': '2',
+    'trackity_id': 'dd393ec3-561d-b612-c009-277495b0b207',
+    'page': '1',
+    'category': '1883',
+    'urlKey':  'nha-cua-doi-song',
+}
+
+params = {
+    "params_product": {
+        "platform": "web",
+        "version": 3
+    },
+    "params_reviews": {
+        'sort': 'score|desc,id|desc,stars|all',
+        'page': 1,
+        'limit': 5,
+        'include': 'comments,contribute_info,attribute_vote_summary'
+    },
+    "params_seller": {
+        'trackity_id': 'dd393ec3-561d-b612-c009-277495b0b207',
+        "platform": "desktop",
+        "version": 3
+    }
+}
+
+
+base_urls = {
+    "base_url" : "https://tiki.vn",
+    "base_page_url" : "https://tiki.vn/api/personalish/v1/blocks/listings",
+    "base_product_url" : "https://tiki.vn/api/v2/products/{}",
+    "base_reviews_url" : "https://tiki.vn/api/v2/reviews",
+    "base_seller_url" : "https://api.tiki.vn/product-detail/v2/widgets/seller"
+}
+
+class TikiCrawler(MinIOHandler):
+
+    def __init__(self, minio_config, root_dir = "bronze/tiki/", tmp_dir = "./tmp"):
+        super().__init__(minio_config, tmp_dir, root_dir)
+
+        self.tmp_dir = tmp_dir
+        self.root_dir = root_dir
+
+        self.base_url = base_urls["base_url"]
+        self.base_page_url = base_urls["base_page_url"]
+        self.base_product_url = base_urls["base_product_url"]
+        self.base_reviews_url = base_urls["base_reviews_url"]
+        self.base_seller_url = base_urls["base_seller_url"]
+
+        self.headers = headers
+        self.params_page = params_page
+        self.params_product = params["params_product"]
+        self.params_reviews = params["params_reviews"]
+        self.params_seller = params["params_seller"]
+
+
+        self.categories_path = "categories.csv"
+        self.tracking_ids_path = "tracking_ids.csv"
+
+        self.categories_df = self.fetch_categories(self.categories_path)
+        self.tracking_ids_df = self.init_track_ids(self.tracking_ids_path)
+
+    def init_track_ids(self, path):
+        with connect_minio(self.minio_config) as client:
+            minio_path = os.path.join(self.root_dir, path)
+            objects = list(client.list_objects(self.minio_config["bucket"], prefix=minio_path, recursive=True))
+            if not objects:
+                tracking_df = pd.DataFrame(columns=['pid', 'spid', 'seller_id', 'category_id', 'slug'])
+                self.put_file_to_minio(tracking_df, path, file_type="csv")
+            else:
+                tracking_df = self.get_file_from_minio(path, file_type="csv")
+            return tracking_df
+
+    def tracking_ids(self, id):
+        new_id_df = pd.DataFrame([id], columns=self.tracking_ids_df.columns)
+        self.tracking_ids_df = pd.concat([self.tracking_ids_df, new_id_df], ignore_index=True)
+        self.put_file_to_minio(self.tracking_ids_df,self.tracking_ids_path,file_type= "csv")
+
+
+    
+    def fetch_categories(self, path):
+
+        def download_html(url):
+            with urllib.request.urlopen(url) as response:
+                html = response.read().decode('utf-8')
+            return html
+
+        with connect_minio(self.minio_config) as client:
+
+            minio_path = os.path.join(self.root_dir, self.categories_path)
+
+            try:
+                client.stat_object(self.minio_config["bucket"], minio_path)
+                df = self.get_file_from_minio(self.categories_path, file_type="csv")
+
+            except S3Error:
+                source = download_html(self.base_url)
+                soup = BeautifulSoup(source, 'html.parser')
+                cat = soup.find('div', {'class': 'styles__StyledListItem-sc-w7gnxl-0 cjqkgR'})
+                sub_cats = cat.find_all('a', {'title': True})
+                result = [{'title': sub_cat['title'], 'href': sub_cat['href']} for sub_cat in sub_cats]
+                df = pd.DataFrame(result)
+                df[['slug', 'category_id']] = df['href'].str.extract(r'/([^/]+)/c(\d+)')
+                df.drop(columns = ['href'], inplace=True)
+                self.put_file_to_minio(df,path,file_type="csv")
+
+        return df
+    
+    def fetch_ids(self, urlKey, category, page=10):
+        self.params_page['urlKey'] = urlKey
+        self.params_page['category'] = category
+        name = self.categories_df.loc[self.categories_df['category_id'] == str(category), 'title'].values[0]
+    
+        ids = []
+
+        print(f"Fetching products id from category: {name}")
+        for i in tqdm(range(1, page + 1), desc="Pages Scraped", unit="page"):
+            self.params_page['page'] = i
+            response = requests.get(
+                self.base_page_url, headers=self.headers, params=self.params_page)
+
+            if response.status_code == 200:
+                data = response.json().get('data', [])
+                for record in data:
+                    ids.append({'pid': record.get('id'),
+                                'spid': record.get('seller_product_id'),
+                                'seller_id': record.get('seller_id'),
+                                'category_id': category,
+                                'slug': urlKey})   
+                time.sleep(random.randint(3, 10))
+
+        return ids
+
+    def fetch_product(self, id):
+        pid = id['pid']
+        spid = id['spid']
+        seller_id = id['seller_id']
+        slug = id['slug']
+
+        url = self.base_product_url.format(pid)
+        self.params_product['spid'] = spid
+        response = requests.get(url, headers=self.headers, params=self.params_product)
+        if response.status_code == 200:
+            path = f"{slug}/{pid}_{seller_id}/product_{pid}_{seller_id}.json"
+            self.put_file_to_minio(response.json(), path, file_type="json")
+            return True
+        return False
+
+    def fetch_reviews(self, id, page=10):
+        pid = id['pid']
+        spid = id['spid']
+        seller_id = id['seller_id']
+        slug = id['slug']
+
+        self.params_reviews['product_id'] = pid
+        self.params_reviews['spid'] = spid
+        self.params_reviews['seller_id'] = seller_id
+
+        for i in range(1, page+1):
+            self.params_reviews['page'] = i
+            response = requests.get(self.base_reviews_url, headers=self.headers, params=self.params_reviews)
+            if response.status_code == 200:
+                try:
+                    file = response.json()
+                    path = f"{slug}/{pid}_{seller_id}/reviews/reviews_{pid}_{seller_id}_{i}.json"
+                    self.put_file_to_minio(file, path, file_type="json")
+                except Exception as e:
+                    print(f"Error fetching reviews: {e}")
+                    pass
+            else:
+                return False
+        return True
+
+    def fetch_seller(self, id):
+        pid = id['pid']
+        spid = id['spid']
+        seller_id = id['seller_id']
+        slug = id['slug']
+
+        self.params_seller['mpid'] = pid
+        self.params_seller['spid'] = spid
+        self.params_seller['seller_id'] = seller_id
+
+        response = requests.get(self.base_seller_url, headers=self.headers, params=self.params_seller)
+        if response.status_code == 200:
+            path = f"{slug}/{pid}_{seller_id}/seller_{pid}_{seller_id}.json"
+            self.put_file_to_minio(response.json(), path, file_type="json")
+            return True
+        return False
+    
+    def scrape_all_category(self, urlKey, category, page=10):
+        ids = self.fetch_ids(urlKey, category, page)
+        products = []
+        for id in tqdm(ids, desc="Processing", unit="product"):
+            is_existing = (
+                (self.tracking_ids_df['pid'] == id['pid']) &  
+                (self.tracking_ids_df['seller_id'] == id['seller_id'])
+            ).any()
+
+            if not is_existing:
+                f1 = self.fetch_product(id)
+                f2 = self.fetch_reviews(id)
+                f3 = self.fetch_seller(id)
+                if f1 and f2 and f3:
+                    self.tracking_ids(id)
+                    products.append(id)
+        
+        print(f"{len(products)} products added")
+        return products
+    
+    def scrape_all(self, page = 10):
+        categories_level_0 = self.categories_df[self.categories_df['level'] == 0]
+
+        for _, category in categories_level_0.iterrows():
+            urlKey = category['slug']
+            cat_id = category['category_id']
+            self.scrape_all_category(urlKey, cat_id, page)
+
+    def num_products(self):
+        with connect_minio(self.minio_config) as client:
+            objects = client.list_objects(self.minio_config["bucket"], prefix=self.root_dir, recursive=True)
+        
+        level1_folders = set()
+        level2_subfolders = {}
+
+        for obj in objects:
+            parts = obj.object_name[len(self.root_dir):].split('/')
+            if len(parts) > 1: 
+                level1_folder = parts[0]
+                level1_folders.add(level1_folder)
+                
+                if len(parts) > 2 and parts[1]: 
+                    level2_folder = f"{level1_folder}/{parts[1]}"
+                    if level1_folder not in level2_subfolders:
+                        level2_subfolders[level1_folder] = set()
+                    level2_subfolders[level1_folder].add(level2_folder)
+
+        total_subfolders = 0
+        products_num = []
+        for level1_folder, subfolders in level2_subfolders.items():
+            products_num.append({level1_folder:len(subfolders)})
+            total_subfolders += len(subfolders)
+
+        return products_num, total_subfolders
+```
+>[!TIP]
+> Each product is uniquely identified by the pair (product_id, seller_id). 
+>
+> We store data in MinIO using the following structure to facilitate incremental loading and avoid full reloads
+
+![](/static/images/tiki-etl/bronze_minio1.png)
+![](/static/images/tiki-etl/bronze_minio2.png)
+
+```
+warehouse/bronze/tiki/{category_name}/{product_id}_{seller_id}/
+│── product_{product_id}_{seller_id}.json   # Product details
+│── seller_{product_id}_{seller_id}.json    # Seller details
+│── reviews/
+│   ├── reviews_{product_id}_{seller_id}_1.json  # Reviews page 1
+│   ├── reviews_{product_id}_{seller_id}_2.json  # Reviews page 2
+│   ├── ...
+└── categories.csv  # List of product categories
+
+```
+This approach ensures that if the crawling process crashes, we can restart from where it left off without losing progress.  
+Additionally, we can set up a **cron job** to schedule periodic crawls for new products, ensuring our dataset remains up to date.  
+
+**Bronze Layer Asset Structure** 
+
+The asset in Dagster like this
+![Bronze Layer](/static/images/tiki-etl/bronze_layer.png)
+
+## Transform
+### Silver Layer
+- The bronze layer is cleaned and converted into structured **Spark DataFrames**: `categories`, `products`, `sellers`, `reviews`.
+- Data is stored as **Parquet files** in MinIO.
+
+**Example: Transforming `reviews` data**
+```python
+@asset(
+    ins={"silver_products": AssetIn(key_prefix=["silver", "tiki"])}
+    io_manager_key="spark_io_manager",
+    key_prefix=["silver", "tiki"],
+    group_name="silver_layer",
+    compute_kind="PySpark"
+)
+def silver_reviews(silver_products):
+    transformer = TikiTransform(MINIO_CONFIG)
+    reviews_df = transformer.transform_data(type="reviews")
+    
+    with connect_spark(SPARK_CONFIG) as spark:
+        reviews_spark_df = spark.createDataFrame(reviews_df)
+        reviews_spark_df = reviews_spark_df.join(
+            silver_products.select("product_id", "seller_id"),
+            on=["product_id", "seller_id"], how="inner"
+        )
+        reviews_spark_df = reviews_spark_df.dropDuplicates(["review_id"])
+    
+    return Output(
+        reviews_spark_df,
+        metadata={"table": "silver_reviews", "records count": reviews_spark_df.count()},
+    )
+```
+Others similar like this.
+### MinIO Structures
+![](/static/images/tiki-etl/silver_minio.png)
+### Dagster Assets
+![Silver Layer](/static/images/tiki-etl/silver_layer.png)
+
+### Gold Layer
+Data is optimized for **storage & querying**.
+
+Attributes such as `brand`, `author`, etc., are extracted into separate tables.
+
+![Gold Layer](/static/images/tiki-etl/gold_layer.png)
+
+
+## Load (Data Warehouse)
+Processed data is loaded into **PostgreSQL** for analytics.
+
+### Data schema
+![PostgreSQL Schema](/static/images/tiki-etl/schema.png)
+### Dagster Assets
+![DWH Structure](/static/images/tiki-etl/dwh_layer.png)
+### MinIO Structures
+![](/static/images/tiki-etl/gold_minio.png)
+
+## Recommendation Layer (Data Modeling)
+
+Recommender systems play a crucial role in e-commerce by suggesting relevant items to users. 
+
+In our approach, we utilize two recommendation methods:
+
+![Filtering Methods](/static/images/tiki-etl/filtering.png)
+
+
+### **Content-Based Filtering**
+This method generates recommendations based on user interactions and product attributes.
+
+#### **Key Features:**
+- Analyzes product **title & description**
+- Removes stopwords and tokenizes text
+- Uses **TF-IDF** and **Gensim Similarity** to compute similarity scores
+- Higher similarity scores indicate more relevant recommendations
+
+#### **TF-IDF Formula:**
+
+  $$
+  TF(t, d) = \frac{f_{t,d}}{ \sum_{t' \in d} f_{t',d} } \\
+
+  IDF(t) = \log \left(\frac{N}{1 + DF(t)} \right) \\
+
+  TF-IDF(t, d) = TF(t, d) \times IDF(t)
+  $$
+
+#### **Implementation:**
+```python
+@asset(
+    ins={"gold_products": AssetIn(key_prefix=["gold", "tiki"])},
+    io_manager_key="spark_io_manager",
+    key_prefix=["recommendation", "tiki"],
+    group_name="recommendation_layer",
+    compute_kind="PySpark"
+)
+def rcm_content_based_filtering(gold_products):
+    gold_products = gold_products.orderBy(["product_id", "seller_id"])
+
+    gold_products = gold_products.withColumn(
+        'content',
+        concat(gold_products['product_name'], lit(' '), gold_products['description'], lit(' '), gold_products['specifications'])
+    )
+
+    gold_products = gold_products.withColumn('processed_info', process_text(gold_products['content']))
+    
+    info = gold_products.select("processed_info").rdd.map(lambda row: row[0].split()).collect()
+    dictionary = corpora.Dictionary(info)
+
+    stop_words = load_stopword("/opt/dagster/app/vietnamese-stopwords.txt")
+    stop_ids = [dictionary.token2id[stopword] for stopword in stop_words if stopword in dictionary.token2id]
+    once_ids = [tokenid for tokenid, docfreq in dictionary.dfs.items() if docfreq == 1]
+    dictionary.filter_tokens(stop_ids + once_ids)
+    dictionary.compactify()
+
+    corpus = [dictionary.doc2bow(text) for text in info]
+    tfidf = models.TfidfModel(corpus)
+    feature_cnt = len(dictionary.token2id)
+    index = similarities.SparseMatrixSimilarity(tfidf[corpus], num_features=feature_cnt)
+
+    # Save models locally
+    local_dict_path = "/tmp/dictionary.gensim"
+    local_tfidf_path = "/tmp/tfidf_model.gensim"
+    local_index_path = "/tmp/similarity_index.gensim"
+
+    dictionary.save(local_dict_path)
+    tfidf.save(local_tfidf_path)
+    index.save(local_index_path)
+
+    # Upload to MinIO
+    with connect_minio(MINIO_CONFIG) as client:
+        client.fput_object("warehouse", "recommendation/tiki/content_based/dictionary.gensim", local_dict_path)
+        client.fput_object("warehouse", "recommendation/tiki/content_based/tfidf_model.gensim", local_tfidf_path)
+        client.fput_object("warehouse", "recommendation/tiki/content_based/similarity_index.gensim", local_index_path)
+
+    # Clean up local files
+    os.remove(local_dict_path)
+    os.remove(local_tfidf_path)
+    os.remove(local_index_path)
+
+    return Output(value=None, metadata={"message": "Models have been successfully uploaded to MinIO"})
+```
+> [!NOTE]
+> The search query model follows a similar approach to content-based filtering.
+### **Collaborative Filtering (ALS Model)**
+This method suggests items based on user behavior and item interactions.
+
+#### **Key Features:**
+
+- Assumes that if a user liked an item before, they will like similar ones
+- Uses Apache Spark's **Alternating Least Squares (ALS)** for recommendation generation
+- Updates recommendations only when new data is available
+
+#### **Implementation:**
+
+```python
+@asset(
+    ins={"gold_reviews": AssetIn(key_prefix=["gold", "tiki"])},
+    io_manager_key="spark_io_manager",
+    key_prefix=["recommendation", "tiki"],
+    group_name="recommendation_layer",
+    compute_kind="PySpark"
+)
+def rcm_collaborative_filtering(gold_reviews):
+    gold_reviews = gold_reviews.withColumn(
+        'item_id',
+        concat(gold_reviews['product_id'], lit('_'), gold_reviews['seller_id'])
+    )
+    
+    gold_reviews = gold_reviews.withColumn('original_item_id', gold_reviews['item_id'])
+    indexer = StringIndexer(inputCol="item_id", outputCol="item_index")
+    gold_reviews = indexer.fit(gold_reviews).transform(gold_reviews)
+    
+    als = ALS(userCol="customer_id", itemCol="item_index", ratingCol="rating", coldStartStrategy="drop")
+    model = als.fit(gold_reviews)
+    
+    user_recs = model.recommendForAllUsers(20)
+    exploded_recs = user_recs.withColumn("recommendation", explode(col("recommendations")))
+    exploded_recs = exploded_recs.withColumn("item_index", col("recommendation.item_index"))
+    exploded_recs = exploded_recs.withColumn("rating", col("recommendation.rating"))
+    
+    distinct_items = gold_reviews.select("original_item_id", "item_index").dropDuplicates(["item_index"])
+    processed_user_recs = exploded_recs.join(distinct_items, on="item_index")
+    
+    processed_user_recs = processed_user_recs.withColumn("product_id", split(col("original_item_id"), "_")[0].cast("int"))
+    processed_user_recs = processed_user_recs.withColumn("seller_id", split(col("original_item_id"), "_")[1].cast("int"))
+    
+    processed_user_recs = processed_user_recs.select("customer_id", "product_id", "seller_id", "rating")
+    
+    return Output(value=processed_user_recs, metadata={"message": "Models have been successfully uploaded to MinIO"})
+```
+
+
+### **Recommendation Model Storage**
+All trained recommendation models are stored in MinIO for scalability and retrieval.
+
+![Recommendation Storage](/static/images/tiki-etl/recommendation_minio.png)
+
+## Serving  
+
+Now, it's time to experience the results:  
+
+- **Metabase Dashboard** for interactive data visualization.  
+- **Streamlit-powered Recommendation System** for real-time product suggestions.  
+
+💡 **Discover these features in the [Tiki Recommender System ETL Pipeline App](https://tiki-recommender-etl-pipeline.streamlit.app)!** 🚀
+
+
